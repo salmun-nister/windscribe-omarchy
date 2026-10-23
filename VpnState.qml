@@ -595,8 +595,14 @@ Item {
 
   function notify(summary, body, urgency) {
     if (!notificationsOn) return
-    Quickshell.execDetached(["notify-send", "-a", "Windscribe", "-i", "network-vpn",
-                             "-u", urgency || "normal", summary, body || ""])
+    // omarchy-notification-send sends the icon as a real app_icon; notify-send's
+    // -i goes out as an image-path hint, which the Omarchy shell renders with an
+    // unchecked lookup and paints as a missing-texture placeholder when the name
+    // is not in the user's icon theme (there is no plain "network-vpn" in Yaru).
+    // The Nerd Font shield reads the same whatever icon theme is applied.
+    Quickshell.execDetached(["omarchy-notification-send", "--app-name", "Windscribe",
+                             "-g", "\uf132", "-u", urgency || "normal",
+                             summary, body || ""])
   }
 
   function trafficReset() {
