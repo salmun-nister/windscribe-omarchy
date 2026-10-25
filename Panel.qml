@@ -1407,12 +1407,22 @@ Panel {
                 // estimated, which is what the wheel used to trip over.
                 implicitHeight: Style.space(26)
 
-                SectionLabel {
+                // Group headers are scanned against 200 rows, so they need
+                // more ink than the lone section labels in settings: the
+                // label level of the design's hierarchy, a step up in size,
+                // tighter tracking than the micro style.
+                Text {
                   visible: locationRowItem.modelData.kind === "header"
                   width: parent.width
                   anchors.bottom: parent.bottom
+                  anchors.bottomMargin: Style.space(4)
                   text: locationRowItem.modelData.kind === "header"
                     ? String(locationRowItem.modelData.label || "") : ""
+                  textFormat: Text.PlainText
+                  color: root.labelFg
+                  font.family: root.contentFontFamily
+                  font.pixelSize: root.fzSmall
+                  font.letterSpacing: 1
                 }
 
                 CursorSurface {
