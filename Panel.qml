@@ -1388,30 +1388,24 @@ Panel {
               spacing: 0
               model: root.locationRows
               currentIndex: root.displayIndexFor(root.locationIndex)
+              // Native wheel handling only. Writing contentY by hand let the
+              // clamp freeze on a stale contentHeight estimate, stranding the
+              // wheel mid-list and snapping back at the ends; Qt's own
+              // Flickable scroll keeps the true bounds. Interactive only
+              // while there is something to scroll.
+              interactive: contentHeight > height
               boundsBehavior: Flickable.StopAtBounds
               ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-              WheelHandler {
-                target: null
-                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                onWheel: function(event) {
-                  var dy = event.pixelDelta.y !== 0
-                    ? event.pixelDelta.y
-                    : (event.angleDelta.y / 120) * Style.space(56)
-                  locationList.contentY = Math.max(
-                    0,
-                    Math.min(locationList.contentHeight - locationList.height, locationList.contentY - dy)
-                  )
-                  event.accepted = true
-                }
-              }
 
               delegate: Item {
                 id: locationRowItem
                 required property var modelData
                 required property int index
                 width: locationList.width
-                implicitHeight: modelData.kind === "header" ? Style.space(24) : Style.space(26)
+                // One height for headers and rows: uniform delegates keep
+                // ListView's contentHeight arithmetic exact instead of
+                // estimated, which is what the wheel used to trip over.
+                implicitHeight: Style.space(26)
 
                 SectionLabel {
                   visible: locationRowItem.modelData.kind === "header"
@@ -1425,11 +1419,13 @@ Panel {
                   id: locationRow
                   visible: locationRowItem.modelData.kind !== "header"
                   anchors.fill: parent
-                  // Headers are not part of the selectable list, so the row
-                  // reads the entry and its visibleEntries index through these
-                  // shims instead of the display row.
+                  // Headers reuse this surface but hide it, and the bindings
+                  // below evaluate regardless of visibility — so the shim
+                  // falls back to an inert "header" entry rather than null,
+                  // which would throw in every text binding. The helpers all
+                  // read it as empty text, no star, and not current.
                   property var modelData: locationRowItem.modelData.kind === "entry"
-                    ? locationRowItem.modelData.entry : null
+                    ? locationRowItem.modelData.entry : { kind: "header" }
                   property int index: locationRowItem.modelData.kind === "entry"
                     ? locationRowItem.modelData.entryIndex : -1
                   foreground: root.fg
