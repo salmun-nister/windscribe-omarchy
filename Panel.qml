@@ -61,6 +61,9 @@ Panel {
 
   readonly property string toggleHint: vpn.active ? "Disconnect Windscribe" : "Connect Windscribe"
   readonly property var visibleEntries: buildEntries()
+  // Headers and entries as rendered. Cursor arithmetic stays against
+  // visibleEntries; displayIndexFor() is the only bridge between the two.
+  readonly property var locationRows: buildLocationRows()
   readonly property var connectionEntries: buildConnectionEntries()
   readonly property bool recoveryVisible: vpn.networkInterference || vpn.connectionState === "Error"
   readonly property bool motionOn: {
@@ -217,12 +220,13 @@ Panel {
       || "fastest location".indexOf(query) === 0
       || "best".indexOf(query) === 0
     if (vpn.installed && bestMatches)
-      out.push({ kind: "best", city: "", country: "", nickname: "", pro: false, tenGbps: false })
+      out.push({ kind: "best", city: "", country: "", nickname: "", pro: false, tenGbps: false, group: "best" })
 
     for (var i = 0; i < favoriteLocations.length; i++) {
       var favorite = String(favoriteLocations[i] || "").trim()
       if (favorite === "" || seen[targetKey(favorite)]) continue
       var entry = entryForTarget(favorite, "favorite")
+      entry.group = "favourites"
       if (entryMatches(entry, query)) {
         out.push(entry)
         seen[entryKey(entry)] = true
@@ -238,7 +242,8 @@ Panel {
       var location = available[j]
       if (location.disabled) continue
       var candidate = { kind: "location", city: location.city, country: location.country,
-                        nickname: location.nickname, pro: location.pro, tenGbps: location.tenGbps }
+                        nickname: location.nickname, pro: location.pro, tenGbps: location.tenGbps,
+                        group: location.country }
       var key = entryKey(candidate)
       if (seen[key] || seen[targetKey(entryTarget(candidate))] || !entryMatches(candidate, query)) continue
       out.push(candidate)
@@ -247,7 +252,7 @@ Panel {
       matched = true
     }
     if (query !== "" && !matched && vpn.installed && vpn.isSafeLocation(locationQuery.trim()))
-      out.push({ kind: "custom", city: locationQuery.trim(), country: "", nickname: "", pro: false, tenGbps: false })
+      out.push({ kind: "custom", city: locationQuery.trim(), country: "", nickname: "", pro: false, tenGbps: false, group: "" })
 
     return out
   }
@@ -255,6 +260,23 @@ Panel {
   function rowIndexLabel(index) {
     var value = index + 1
     return (value < 10 ? "0" : "") + value
+  }
+
+  // Search results render flat: typing already narrows the list, and section
+  // headers between one or two matches are noise. Everything else groups.
+  function buildLocationRows() {
+    return Model.groupLocationRows(visibleEntries, String(locationQuery || "").trim() === "")
+  }
+
+  // Index of the display row that carries the given entry, for scrolling and
+  // the ListView's currentIndex. Headers are not selectable, so an entry's
+  // display position is never its entry index.
+  function displayIndexFor(entryIndex) {
+    for (var i = 0; i < locationRows.length; i++) {
+      var row = locationRows[i]
+      if (row.kind === "entry" && row.entryIndex === entryIndex) return i
+    }
+    return Math.max(0, Math.min(entryIndex, Math.max(0, locationRows.length - 1)))
   }
 
   function entrySlug(entry) {
@@ -472,7 +494,7 @@ Panel {
     locationIndex = Math.max(0, Math.min(Number(index), Math.max(0, visibleEntries.length - 1)))
     keyCatcher.forceActiveFocus()
     Qt.callLater(function() {
-      locationList.positionViewAtIndex(locationIndex, ListView.Contain)
+      locationList.positionViewAtIndex(displayIndexFor(locationIndex), ListView.Contain)
       root.ensurePanelItemVisible(locationList)
     })
   }
@@ -615,7 +637,7 @@ Panel {
       return
     }
     locationIndex = (locationIndex + direction + visibleEntries.length) % visibleEntries.length
-    Qt.callLater(function() { locationList.positionViewAtIndex(locationIndex, ListView.Contain) })
+    Qt.callLater(function() { locationList.positionViewAtIndex(displayIndexFor(locationIndex), ListView.Contain) })
   }
 
   function activateConnection() {
@@ -1364,8 +1386,8 @@ Panel {
               height: Math.min(contentHeight, Style.space(272))
               clip: true
               spacing: 0
-              model: root.visibleEntries
-              currentIndex: root.locationIndex
+              model: root.locationRows
+              currentIndex: root.displayIndexFor(root.locationIndex)
               boundsBehavior: Flickable.StopAtBounds
               ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -1384,137 +1406,158 @@ Panel {
                 }
               }
 
-              delegate: CursorSurface {
-                id: locationRow
+              delegate: Item {
+                id: locationRowItem
                 required property var modelData
                 required property int index
                 width: locationList.width
-                implicitHeight: Style.space(26)
-                foreground: root.fg
-                hasCursor: root.cursorActive && root.focusSection === "locations" && root.locationIndex === index
-                Accessible.role: Accessible.Button
-                Accessible.name: (root.entryCurrent(modelData) ? "Current location. " : "")
-                  + root.entryTitle(modelData) + ". " + root.entrySubtitle(modelData)
-                Accessible.focusable: true
-                Accessible.focused: hasCursor
-                Accessible.onPressAction: if (!vpn.busy) root.activateEntry(modelData)
+                implicitHeight: modelData.kind === "header" ? Style.space(24) : Style.space(26)
 
-                MouseArea {
+                SectionLabel {
+                  visible: locationRowItem.modelData.kind === "header"
+                  width: parent.width
+                  anchors.bottom: parent.bottom
+                  text: locationRowItem.modelData.kind === "header"
+                    ? String(locationRowItem.modelData.label || "") : ""
+                }
+
+                CursorSurface {
+                  id: locationRow
+                  visible: locationRowItem.modelData.kind !== "header"
                   anchors.fill: parent
-                  anchors.rightMargin: favoriteStar.width + Style.space(6)
-                  hoverEnabled: true
-                  cursorShape: vpn.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-                  enabled: !vpn.busy
-                  onEntered: root.focusLocation(locationRow.index)
-                  onClicked: root.activateEntry(locationRow.modelData)
-                }
-
-                Text {
-                  id: rowIndex
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(2)
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: Style.space(20)
-                  text: root.rowIndexLabel(locationRow.index)
-                  textFormat: Text.PlainText
-                  color: root.faintFg
-                  font.family: root.contentFontFamily
-                  font.pixelSize: root.fzSmall
-                }
-
-                Text {
-                  id: rowSlug
-                  anchors.left: rowIndex.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: Math.min(implicitWidth, parent.width - rowIndex.width - rowRight.width - Style.space(20))
-                  text: root.entrySlug(locationRow.modelData)
-                  textFormat: Text.PlainText
-                  color: root.entryCurrent(locationRow.modelData)
-                    ? root.accent
-                    : (locationRow.modelData.kind === "best"
-                        || (root.entryStarable(locationRow.modelData)
-                            && root.isFavorite(root.entryTarget(locationRow.modelData)))
-                        ? root.fg
-                        : root.rowFg)
-                  font.family: root.contentFontFamily
-                  font.pixelSize: root.fzRow
-                  font.bold: locationRow.modelData.kind === "best"
-                    || root.entryCurrent(locationRow.modelData)
-                    || (root.entryStarable(locationRow.modelData)
-                        && root.isFavorite(root.entryTarget(locationRow.modelData)))
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  anchors.left: rowSlug.right
-                  anchors.leftMargin: Style.space(8)
-                  anchors.right: rowRight.left
-                  anchors.rightMargin: Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: root.entryMeta(locationRow.modelData)
-                  textFormat: Text.PlainText
-                  color: root.faintFg
-                  font.family: root.contentFontFamily
-                  font.pixelSize: root.fzSmall
-                  elide: Text.ElideRight
-                }
-
-                Row {
-                  id: rowRight
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(7)
-
+                  // Headers are not part of the selectable list, so the row
+                  // reads the entry and its visibleEntries index through these
+                  // shims instead of the display row.
+                  property var modelData: locationRowItem.modelData.kind === "entry"
+                    ? locationRowItem.modelData.entry : null
+                  property int index: locationRowItem.modelData.kind === "entry"
+                    ? locationRowItem.modelData.entryIndex : -1
+                  foreground: root.fg
+                  hasCursor: root.cursorActive && root.focusSection === "locations" && root.locationIndex === index
+                  Accessible.role: Accessible.Button
+                  Accessible.name: (root.entryCurrent(modelData) ? "Current location. " : "")
+                    + root.entryTitle(modelData) + ". " + root.entrySubtitle(modelData)
+                  Accessible.focusable: true
+                  Accessible.focused: hasCursor
+                  Accessible.onPressAction: if (!vpn.busy) root.activateEntry(modelData)
+  
+                  MouseArea {
+                    anchors.fill: parent
+                    anchors.rightMargin: favoriteStar.width + Style.space(6)
+                    hoverEnabled: true
+                    cursorShape: vpn.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
+                    enabled: !vpn.busy
+                    onEntered: root.focusLocation(locationRow.index)
+                    onClicked: root.activateEntry(locationRow.modelData)
+                  }
+  
                   Text {
+                    id: rowIndex
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(2)
                     anchors.verticalCenter: parent.verticalCenter
-                    visible: text !== ""
-                    text: root.entryBadge(locationRow.modelData)
+                    width: Style.space(20)
+                    text: root.rowIndexLabel(locationRow.index)
                     textFormat: Text.PlainText
-                    color: locationRow.modelData.kind === "best" || locationRow.modelData.tenGbps
-                      ? root.accent
-                      : root.dimFg
+                    color: root.faintFg
                     font.family: root.contentFontFamily
                     font.pixelSize: root.fzSmall
                   }
-
+  
                   Text {
-                    id: favoriteStar
+                    id: rowSlug
+                    anchors.left: rowIndex.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Style.space(14)
-                    horizontalAlignment: Text.AlignHCenter
-                    text: locationRow.modelData.kind === "best"
-                      ? " "
-                      : (root.isFavorite(root.entryTarget(locationRow.modelData)) ? "*" : "·")
+                    width: Math.min(implicitWidth, parent.width - rowIndex.width - rowRight.width - Style.space(20))
+                    text: root.entrySlug(locationRow.modelData)
                     textFormat: Text.PlainText
-                    color: root.entryStarable(locationRow.modelData)
-                        && root.isFavorite(root.entryTarget(locationRow.modelData))
+                    color: root.entryCurrent(locationRow.modelData)
                       ? root.accent
-                      : root.faintFg
+                      : (locationRow.modelData.kind === "best"
+                          || (root.entryStarable(locationRow.modelData)
+                              && root.isFavorite(root.entryTarget(locationRow.modelData)))
+                          ? root.fg
+                          : root.rowFg)
                     font.family: root.contentFontFamily
                     font.pixelSize: root.fzRow
-                    font.bold: true
-                    Accessible.role: Accessible.Button
-                    Accessible.ignored: !root.entryStarable(locationRow.modelData)
-                    Accessible.focusable: root.entryStarable(locationRow.modelData)
-                    Accessible.focused: false
-                    Accessible.name: root.entryStarable(locationRow.modelData)
-                      ? (root.isFavorite(root.entryTarget(locationRow.modelData))
-                          ? "Remove from Favourites"
-                          : "Add to Favourites")
-                      : ""
-                    Accessible.onPressAction: {
-                      if (root.entryStarable(locationRow.modelData))
-                        root.toggleFavorite(root.entryTarget(locationRow.modelData))
+                    font.bold: locationRow.modelData.kind === "best"
+                      || root.entryCurrent(locationRow.modelData)
+                      || (root.entryStarable(locationRow.modelData)
+                          && root.isFavorite(root.entryTarget(locationRow.modelData)))
+                    elide: Text.ElideRight
+                  }
+  
+                  Text {
+                    anchors.left: rowSlug.right
+                    anchors.leftMargin: Style.space(8)
+                    anchors.right: rowRight.left
+                    anchors.rightMargin: Style.space(8)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.entryMeta(locationRow.modelData)
+                    textFormat: Text.PlainText
+                    color: root.faintFg
+                    font.family: root.contentFontFamily
+                    font.pixelSize: root.fzSmall
+                    elide: Text.ElideRight
+                  }
+  
+                  Row {
+                    id: rowRight
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(7)
+  
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      visible: text !== ""
+                      text: root.entryBadge(locationRow.modelData)
+                      textFormat: Text.PlainText
+                      color: locationRow.modelData.kind === "best" || locationRow.modelData.tenGbps
+                        ? root.accent
+                        : root.dimFg
+                      font.family: root.contentFontFamily
+                      font.pixelSize: root.fzSmall
                     }
-
-                    MouseArea {
-                      anchors.fill: parent
-                      anchors.margins: -Style.space(4)
-                      enabled: root.entryStarable(locationRow.modelData)
-                      hoverEnabled: true
-                      cursorShape: Qt.PointingHandCursor
-                      onEntered: root.focusLocation(locationRow.index)
-                      onClicked: root.toggleFavorite(root.entryTarget(locationRow.modelData))
+  
+                    Text {
+                      id: favoriteStar
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: Style.space(14)
+                      horizontalAlignment: Text.AlignHCenter
+                      text: locationRow.modelData.kind === "best"
+                        ? " "
+                        : (root.isFavorite(root.entryTarget(locationRow.modelData)) ? "*" : "·")
+                      textFormat: Text.PlainText
+                      color: root.entryStarable(locationRow.modelData)
+                          && root.isFavorite(root.entryTarget(locationRow.modelData))
+                        ? root.accent
+                        : root.faintFg
+                      font.family: root.contentFontFamily
+                      font.pixelSize: root.fzRow
+                      font.bold: true
+                      Accessible.role: Accessible.Button
+                      Accessible.ignored: !root.entryStarable(locationRow.modelData)
+                      Accessible.focusable: root.entryStarable(locationRow.modelData)
+                      Accessible.focused: false
+                      Accessible.name: root.entryStarable(locationRow.modelData)
+                        ? (root.isFavorite(root.entryTarget(locationRow.modelData))
+                            ? "Remove from Favourites"
+                            : "Add to Favourites")
+                        : ""
+                      Accessible.onPressAction: {
+                        if (root.entryStarable(locationRow.modelData))
+                          root.toggleFavorite(root.entryTarget(locationRow.modelData))
+                      }
+  
+                      MouseArea {
+                        anchors.fill: parent
+                        anchors.margins: -Style.space(4)
+                        enabled: root.entryStarable(locationRow.modelData)
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onEntered: root.focusLocation(locationRow.index)
+                        onClicked: root.toggleFavorite(root.entryTarget(locationRow.modelData))
+                      }
                     }
                   }
                 }
